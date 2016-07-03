@@ -239,14 +239,14 @@ class Udev:
                         pass
                     elif "Starting Nmap" in self.line:
                         logging.info("Starting Cobra Scan Engine...")
-                    elif "Nmap scan report for" in self.line:
+                    elif "Nmap scan report for" in self.line or 'Interesting ports on' in self.line:
                         if self.hosts >= 1:
                             self.parse_port_vul()
                             self.parse_ports()
                         self.hosts += 1
                         self.current_host = re.findall(r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})', self.line)[0]
                         logging.info("\n" + self.current_host)
-                    elif "Nmap done" in self.line:
+                    elif "Nmap done" in self.line or "Nmap finished" in self.line:
                         self.parse_port_vul()
                         self.parse_ports()
 
