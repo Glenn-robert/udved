@@ -150,7 +150,7 @@ class Daemon(object):
 
 
 PIDFILE = '/var/run/udevd.pid'
-LOGFILE = '/dev/log/udevd.log'
+LOGFILE = '/var/log/udevd.log'
 
 # Configure logging
 logging.basicConfig(filename=LOGFILE, level=logging.DEBUG)
@@ -160,7 +160,7 @@ class Udevd(Daemon):
     def run(self):
         try:
             Udev().listening()
-        except Exception:
+        except:
             logging.exception('exception')
 
 
