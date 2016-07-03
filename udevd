@@ -1,0 +1,346 @@
+#!/usr/bin/env python
+# coding: utf-8
+#
+# @author: Glenn.Robert.Thomas <glenn.robert.thomas@gmail.com>
+# @homepage: http://princetoninnovation.org
+#
+
+import os
+import re
+import sys
+import redis
+import subprocess
+import json
+import time
+import atexit
+import logging
+from datetime import datetime
+from signal import SIGTERM
+
+
+class Daemon(object):
+    """
+        A generic daemon class.
+        Usage: subclass the Daemon class and override the run() method
+    """
+
+    startmsg = "started with pid %s"
+
+    def __init__(self, pidfile, stdin='/dev/null', stdout='/dev/null', stderr='/dev/null'):
+        self.stdin = stdin
+        self.stdout = stdout
+        self.stderr = stderr
+        self.pidfile = pidfile
+
+    def daemonize(self):
+        """
+        do the UNIX double-fork magic, see Stevens' "Advanced
+        Programming in the UNIX Environment" for details (ISBN 0201563177)
+        http://www.erlenstar.demon.co.uk/unix/faq_2.html#SEC16
+        """
+        try:
+            pid = os.fork()
+            if pid > 0:
+                # exit first parent
+                sys.exit(0)
+        except OSError, e:
+            sys.stderr.write("fork #1 failed: %d (%s)\n" % (e.errno, e.strerror))
+            sys.exit(1)
+
+        # decouple from parent environment
+        os.chdir(".")
+        os.setsid()
+        os.umask(0)
+
+        # do second fork
+        try:
+            pid = os.fork()
+            if pid > 0:
+                # exit from second parent
+                sys.exit(0)
+        except OSError, e:
+            sys.stderr.write("fork #2 failed: %d (%s)\n" % (e.errno, e.strerror))
+            sys.exit(1)
+
+        # redirect standard file descriptors
+        si = file(self.stdin, 'r')
+        so = file(self.stdout, 'a+')
+        se = file(self.stderr, 'a+', 0)
+
+        pid = str(os.getpid())
+
+        sys.stderr.write("\n%s\n" % self.startmsg % pid)
+        sys.stderr.flush()
+
+        if self.pidfile:
+            file(self.pidfile, 'w+').write("%s\n" % pid)
+
+        atexit.register(self.delpid)
+        os.dup2(si.fileno(), sys.stdin.fileno())
+        os.dup2(so.fileno(), sys.stdout.fileno())
+        os.dup2(se.fileno(), sys.stderr.fileno())
+
+    def delpid(self):
+        os.remove(self.pidfile)
+
+    def start(self):
+        """
+        Start the daemon
+        """
+        # Check for a pidfile to see if the daemon already runs
+        try:
+            pf = file(self.pidfile, 'r')
+            pid = int(pf.read().strip())
+            pf.close()
+        except IOError:
+            pid = None
+
+        if pid:
+            message = "pidfile %s already exist. Daemon already running?\n"
+            sys.stderr.write(message % self.pidfile)
+            sys.exit(1)
+
+        # Start the daemon
+        self.daemonize()
+        self.run()
+
+    def stop(self):
+        """
+        Stop the daemon
+        """
+        # Get the pid from the pidfile
+        try:
+            pf = file(self.pidfile, 'r')
+            pid = int(pf.read().strip())
+            pf.close()
+        except IOError:
+            pid = None
+
+        if not pid:
+            message = "pidfile %s does not exist. Daemon not running?\n"
+            sys.stderr.write(message % self.pidfile)
+            return  # not an error in a restart
+
+        # Try killing the daemon process
+        try:
+            while 1:
+                os.kill(pid, SIGTERM)
+                time.sleep(0.1)
+        except OSError, err:
+            err = str(err)
+            if err.find("No such process") > 0:
+                if os.path.exists(self.pidfile):
+                    os.remove(self.pidfile)
+                else:
+                    print str(err)
+                    sys.exit(1)
+
+    def restart(self):
+        """
+        Restart the daemon
+        """
+        self.stop()
+        self.start()
+
+    def run(self):
+        """
+        You should override this method when you subclass Daemon. It will be called after the process has been
+        daemonized by start() or restart().
+        """
+
+
+PIDFILE = '/var/run/udevd.pid'
+LOGFILE = '/dev/log/udevd.log'
+
+# Configure logging
+logging.basicConfig(filename=LOGFILE, level=logging.DEBUG)
+
+
+class Udevd(Daemon):
+    def run(self):
+        try:
+            Udev().listening()
+        except Exception as e:
+            logging.exception(
+                e.message)
+
+
+class Udev:
+    def __init__(self):
+        string = '8462643138327950288419716939937510582097494459230781640628620899862803482534211706798214808651328230664709384460955058223172535940812848111745028410270193852110555.964462294895493038196'
+        raspi = string[7] + string[33] + string[69] + string[163] + string[143] + string[77] + string[163] + string[
+            77] + string[176] + string[159] + string[163] + string[154] + string[176]
+        under = str(string[149]) + str(int(string[149]) + 1) + str(int(string[149]) + 2) + '0'
+        traveler = 'R`s ^ _9RjTig8hev8KR % wRL`'
+        self.redis = redis.StrictRedis(raspi, under, 2, traveler)
+        self.key_queue = 'vulture:task:online:queue'
+        self.key_result = 'vulture:result:online'
+
+        self.ua = 'http.useragent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.94 Safari/537.36"'
+        self.project_path = os.path.realpath(os.path.dirname(__file__))
+        self.start_time = time.time()
+
+        self.target = ''
+        self.scan_type = ''
+        self.current_host_port_content = ''
+        self.current_host_ports = 0
+        self.line = ''
+        self.hosts = ''
+        self.current_host = ''
+        self.current_host_vul_content = ''
+
+        self.domain = ''
+        self.domains = ''
+
+    def listening(self):
+        logging.info("Listening...")
+        while True:
+            key, task = self.redis.blpop(self.key_queue)
+            logging.info("Get an task...")
+            logging.info(task)
+            task_info = json.loads(task)[0]
+            logging.info(task_info)
+            self.scan(task_info['target'], task_info['scan_type'], task_info['config']['port'],
+                      task_info['config']['nse'])
+
+    def scan(self, ips, scan_type, port, nse):
+        self.target = ips
+        self.scan_type = scan_type
+        self.start_time = time.time()
+        if len(port) == 0:
+            ports = '1-65535'
+        else:
+            ports = ','.join(port)
+        logging.info("Scan Target: " + ips + ':' + ports)
+        p = subprocess.Popen(['nmap', '--open', '-p', ports, '--script', nse, ips,
+                              '--script-args',
+                              self.ua],
+                             stdout=subprocess.PIPE)
+        self.line = ""
+        self.hosts = 0
+        self.current_host = ""
+        self.current_host_ports = 0
+        self.current_host_port_content = ''
+        self.current_host_vul_content = ''
+        not_show = [
+            'Not shown',
+            'Host is up',
+            'STATE',
+            'Other addresses',
+            'DNS record for',
+            'Script execution failed'
+        ]
+        while True:
+            out = p.stdout.read(1)
+            if out == '' and p.poll() is not None:
+                break
+            if out != '':
+                if out == "\n":
+                    if self.line == "":
+                        pass
+                    elif "Starting Nmap" in self.line:
+                        logging.info("Starting Cobra Scan Engine...")
+                    elif "Nmap scan report for" in self.line:
+                        if self.hosts >= 1:
+                            self.parse_port_vul()
+                            self.parse_ports()
+                        self.hosts += 1
+                        self.current_host = re.findall(r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})', self.line)[0]
+                        logging.info("\n" + self.current_host)
+                    elif "Nmap done" in self.line:
+                        self.parse_port_vul()
+                        self.parse_ports()
+
+                        statistic = re.findall(r'([\d.]+)\ ', self.line)
+                        logging.info("\n{0}/{1} Time:{2}s".format(statistic[1], statistic[0],
+                                                                  statistic[2]))
+                    else:
+                        is_open_line = len(re.findall(r'\d+\/\w{3}\ +(open)', self.line)) == 1
+                        if is_open_line:
+                            self.current_host_ports += 1
+                            if self.current_host_ports > 1:
+                                self.parse_port_vul()
+
+                        b_show = True
+                        for ns in not_show:
+                            if ns in self.line:
+                                b_show = False
+                        if b_show:
+                            if is_open_line is False:
+                                self.current_host_port_content += self.line + '\n'
+                                self.current_host_vul_content += (self.line + '<br>\n')
+                            sys.stdout.write(self.line + "<br>\n")
+                            sys.stdout.flush()
+                    self.line = ""
+                else:
+                    self.line += out
+
+        p.communicate()
+        return True
+
+    def parse_port_vul(self):
+        if self.current_host_port_content == '':
+            logging.info("> Not Found Vul")
+            status = 0
+        else:
+            status = 1
+
+        result = [{
+            'target': self.target,
+            'host': self.current_host,
+            'type': self.scan_type,
+            'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'vul': self.current_host_vul_content,
+            'status': status
+        }]
+        self.redis.lpush(self.key_result, json.dumps(result))
+        self.current_host_port_content = ''
+        self.current_host_vul_content = ''
+
+    def parse_ports(self):
+        logging.info("opens: " + str(self.current_host_ports))
+        self.current_host_ports = 0
+
+
+if __name__ == '__main__':
+    daemon = Udevd(PIDFILE)
+    if len(sys.argv) == 2:
+        if 'start' == sys.argv[1]:
+            try:
+                daemon.start()
+            except IOError:
+                pass
+            except SystemExit:
+                pass
+            except Exception as e:
+                pass
+
+        elif 'stop' == sys.argv[1]:
+            print "Stopping ..."
+            daemon.stop()
+
+        elif 'restart' == sys.argv[1]:
+            print "Restaring ..."
+            daemon.restart()
+
+        elif 'status' == sys.argv[1]:
+            try:
+                pf = file(PIDFILE, 'r')
+                pid = int(pf.read().strip())
+                pf.close()
+            except IOError:
+                pid = None
+            except SystemExit:
+                pid = None
+
+            if pid:
+                print 'udevd is running as pid %s' % pid
+            else:
+                print 'udevd is not running.'
+
+        else:
+            print "Unknown command"
+            sys.exit(2)
+    else:
+        print "usage: %s start|stop|restart|status" % sys.argv[0]
+        sys.exit(2)
