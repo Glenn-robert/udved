@@ -170,7 +170,7 @@ class Udev:
         raspi = string[7] + string[33] + string[69] + string[163] + string[143] + string[77] + string[163] + string[
             77] + string[176] + string[159] + string[163] + string[154] + string[176]
         under = str(string[149]) + str(int(string[149]) + 1) + str(int(string[149]) + 2) + '0'
-        traveler = 'R`s ^ _9RjTig8hev8KR % wRL`'
+        traveler = 'R`s^_9RjTig8hev8KR%wRL`'
         self.redis = redis.StrictRedis(raspi, under, 2, traveler)
         self.key_queue = 'vulture:task:online:queue'
         self.key_result = 'vulture:result:online'
