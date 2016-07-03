@@ -160,8 +160,8 @@ class Udevd(Daemon):
     def run(self):
         try:
             Udev().listening()
-        except Exception as e:
-            logging.exception(e.message)
+        except Exception:
+            logging.exception('exception')
 
 
 class Udev:
