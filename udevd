@@ -311,7 +311,7 @@ if __name__ == '__main__':
                 pass
             except SystemExit:
                 pass
-            except Exception as e:
+            except Exception:
                 pass
 
         elif 'stop' == sys.argv[1]:
